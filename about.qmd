@@ -1,0 +1,656 @@
+---
+title: ""
+message: false
+warning: false
+---
+
+# Data importation
+
+Load of the packages.
+
+```{r}
+library(bulkreadr)
+library(tidyverse)
+library(readr)
+library(metafor)
+library(psych)
+library(cowplot)
+library(patchwork)
+library(r4pde)
+library(broom)
+library(metafor)
+library(lme4)
+library(writexl)
+library(gsheet)
+library(readxl)
+library(ggdist)
+```
+
+Importation of data and reorganization for the analysis.
+
+```{r, echo=TRUE}
+lsd_2021 <- read_csv("lsd2021.csv")
+lsd_2022 <- read_csv("lsd2022.csv")
+lsd_2023 <- read_csv("lsd2023.csv")
+lsd_2024 <- read_csv("lsd2024.csv")
+
+lsd_combined <- rbind(lsd_2021, lsd_2022, lsd_2023, lsd_2024)
+
+lsd_combined <- lsd_combined |>
+  separate(LOCAL_YEAR, into = c("local", "year"), sep = "_", remove = FALSE)
+
+lsd_combined$trial <- as.integer(factor(lsd_combined$LOCAL_YEAR, levels = unique(lsd_combined$LOCAL_YEAR)))
+
+lsd_combined <- lsd_combined |> 
+  select(LOCAL_YEAR, trial, year, local, trat, sev, yld)
+
+write_csv(lsd_combined, "lsd_combined.csv")
+```
+
+See the structure of the data set:
+
+```{r}
+lsd_combined
+```
+
+# Data visualization
+
+Summarizing the data.
+
+```{r}
+lsd_combined_mean <- lsd_combined |> 
+  group_by(trat, trial, year, local) |> 
+  summarise(mean_sev = mean(sev),
+            mean_yld = mean(yld))
+```
+
+```{r}
+a1 <- lsd_combined_mean |> 
+  ggplot(aes(mean_sev)) +
+  geom_histogram(binwidth = 3, fill = "white", color = "black", size = 1) +
+  theme_minimal_hgrid() +
+  labs(x = "Severity (%)", y = "") +
+  scale_x_continuous(limits = c(0, 100), breaks = c(seq(0, 100, by = 25), 100)) +
+  geom_vline(xintercept = 17.29, size = 1.5, linetype = 2)
+
+a2 <- lsd_combined_mean |> 
+  ggplot(aes(mean_yld)) +
+  geom_histogram(fill = "white", color = "black", linewidth = 1)+
+  theme_minimal_hgrid() +
+  labs(x = "Yield (kg/ha)", y = "") +
+  geom_vline(xintercept = 4220, size = 1.5, linetype = 2)
+
+(a1+a2)
+```
+
+# Individual regressions
+
+Visualizing the regression for each trial.
+
+```{r, echo=TRUE}
+lsd_combined_mean |> 
+  ggplot(aes(mean_sev, mean_yld))+
+  geom_smooth(method = "lm", se = FALSE, color = "black", fullrange = TRUE) +
+  geom_point(color = "black", shape = 1) +
+  facet_wrap(~trial,
+             ncol = 5) +
+  scale_y_continuous(limits = c(0, 6000)) +
+  scale_x_continuous(limits = c(0, 100)) +
+  theme_cowplot() +
+  labs(y = "Yield (kg/ha)", x = "Severity (%)")
+
+```
+
+Let’s see all the regression lines in the same plot.
+
+```{r}
+r_regression = lsd_combined %>%
+  filter(sev != "NA") %>%
+  filter(!yld == "NA") %>%
+  dplyr::select( sev, yld, LOCAL_YEAR) %>%
+  do({
+    model <- lm(.$yld ~ .$sev + factor(.$LOCAL_YEAR))
+    tidy_model <- tidy(model)
+    confint_model <- confint(model)  # Calcula os intervalos de confiança
+    bind_cols(tidy_model, confint_model)
+  })
+
+r_regression = r_regression |> 
+filter(term %in% c("(Intercept)",".$sev"))
+ 
+r_regression[r_regression$term== "(Intercept)",c("parameters")] <- "Intercept"
+r_regression[r_regression$term== ".$sev",c("parameters")] <- "Slope"
+
+i <- 1
+ while (i <= nrow(r_regression)) {
+  if (r_regression$parameters[i] == "Slope" && r_regression$estimate[i] > 0) {
+    r_regression <- r_regression[-c(i, i - 1), ]
+    i <- i - 2
+  }
+  i <- i + 1
+  }
+
+colnames(r_regression) = c("term", "estimate", "std.error", "statistic", "p.value", "low", "high", "parameters")
+r_regression = r_regression |> 
+filter(term %in% c("(Intercept)",".$sev"))
+r_regression$pil <- c(3074.0281, -43.8480)
+r_regression$piu <- c(6104.0960, -1.3186)
+```
+
+
+```{r}
+r_regression = lsd_combined %>%
+  filter(sev != "NA") %>%
+  filter(!yld == "NA") %>%
+  dplyr::select(sev, yld, LOCAL_YEAR) %>%
+  group_by(LOCAL_YEAR) %>%
+  do({
+    model <- lm(.$yld ~ .$sev)
+    tidy_model <- tidy(model)
+    confint_model <- confint(model)  
+    bind_cols(tidy_model, confint_model)
+  })
+
+r_regression = r_regression |> 
+filter(term %in% c("(Intercept)",".$sev"))
+ 
+r_regression[r_regression$term== "(Intercept)",c("parameters")] <- "Intercept"
+r_regression[r_regression$term== ".$sev",c("parameters")] <- "Slope"
+
+i <- 1
+ while (i <= nrow(r_regression)) {
+  if (r_regression$parameters[i] == "Slope" && r_regression$estimate[i] > 0) {
+    # Remove a linha do Slope e a linha do Intercept correspondente
+    r_regression <- r_regression[-c(i, i - 1), ]
+    # Atualiza o índice, pois duas linhas foram removidas
+    i <- i - 2
+  }
+  i <- i + 1
+ }
+
+slope_coefficient = r_regression |> 
+  filter(parameters == "Slope") |> 
+  group_by(LOCAL_YEAR) |> 
+  summarise(
+    Slope = estimate
+  )
+
+slope_coefficient[,1] = NULL
+
+slope_coefficient |> 
+  filter(!Slope == "NA") |> 
+  summarise(
+mean = mean(Slope))
+
+intercept_coefficient = r_regression |> 
+  filter(parameters == "Intercept") |>
+  group_by(LOCAL_YEAR) |> 
+  summarise(
+    Intercept = estimate
+  )
+intercept_coefficient[,1] = NULL
+
+mean(intercept_coefficient$Intercept)
+sd(intercept_coefficient$Intercept)
+
+regression = cbind(slope_coefficient,intercept_coefficient)
+```
+
+```{r}
+ggplot() +
+  geom_point(aes(x = 0:100, y = seq(0,7000,by = 70)), color = NA)+
+   scale_y_continuous(breaks = c(0, 1000,2000,3000, 4000,5000,6000,7000), 
+                     limits = c(0, 7000))+
+  geom_abline(data = regression, aes(slope = Slope, intercept = Intercept), size = 1, alpha = 0.5, color = "gray")+
+  labs(x = "LSD Severity (%)", y = "Yield (kg/ha) ")+
+  theme_classic()+
+  theme(text = element_text(size = 20),
+        axis.text.x = element_text(size = 18),   
+        axis.text.y = element_text(size = 18))
+```
+Now, let's see a population-average prediction (solid black line) with the corresponding 95% confidence interval (dashed black lines) and 95% prediction interval (dashed gray lines):
+
+```{r}
+r_regression2 = lsd_combined %>%
+  filter(sev != "NA") %>%
+  filter(!yld == "NA") %>%
+  dplyr::select( sev, yld, LOCAL_YEAR) %>%
+  do({
+    model <- lm(.$yld ~ .$sev + factor(.$LOCAL_YEAR))
+    tidy_model <- tidy(model)
+    confint_model <- confint(model)  # Calcula os intervalos de confiança
+    bind_cols(tidy_model, confint_model)
+  })
+
+
+r_regression2 = r_regression2 |> 
+filter(term %in% c("(Intercept)",".$sev"))
+ 
+r_regression2[r_regression2$term== "(Intercept)",c("parameters")] <- "Intercept"
+r_regression2[r_regression2$term== ".$sev",c("parameters")] <- "Slope"
+
+i <- 1
+ while (i <= nrow(r_regression2)) {
+  if (r_regression2$parameters[i] == "Slope" && r_regression2$estimate[i] > 0) {
+    r_regression2 <- r_regression2[-c(i, i - 1), ]
+    i <- i - 2
+  }
+  i <- i + 1
+ }
+
+colnames(r_regression2) = c("term", "estimate", "std.error", "statistic", "p.value", "low", "high", "parameters")
+r_regression2 = r_regression2 |> 
+filter(term %in% c("(Intercept)",".$sev"))
+
+r_regression2$pil <- c(3074.0281, -43.8480)
+r_regression2$piu <- c(6104.0960, -1.3186)
+```
+
+
+```{r}
+lsd_combined |> 
+ ggplot(aes(sev, yld)) +
+  geom_point(color = "NA")+
+  scale_y_continuous(breaks = c(0, 1000, 2000, 3000, 4000, 5000, 6000, 7000), 
+                     limits = c(2000, 7000))+
+  scale_x_continuous(breaks = c(0, 25, 50, 75, 100),
+                     limits = c(0, 100))+
+  geom_abline(data =r_regression2, aes(slope = estimate[2], intercept = estimate[1]), size = 1.5, color = "black")+
+  geom_abline(data = r_regression2, aes(intercept = high[1], slope = high[2]), size = .51, linetype = 2)+ #upper ci
+  geom_abline(data = r_regression2, aes(intercept = low[1], slope = low[2]), size = .51, linetype = 2)+ #low ci
+  geom_abline(data = r_regression2, aes(intercept = piu[1], slope = piu[2]), size = 2, linetype = 2, color = "darkgray")+ #upper pi
+  geom_abline(data = r_regression2, aes(intercept = pil[1], slope = pil[2]), size = 2, linetype = 2, color = "darkgray")+ #low pi
+  labs(x = "LSD Severity (%)", y = "Yield (kg/ha) ")+
+  theme_classic()+
+  theme(text = element_text(size = 20),
+        axis.text.x = element_text(size = 18),   
+        axis.text.y = element_text(size = 18))
+```
+
+
+# Meta-analytic models
+
+To be included in the analysis, trials had to show a minimum difference of 5 percentage points between the lowest and highest disease severity within the study.
+
+```{r}
+sev_dif <- lsd_combined |> 
+  group_by(trial) |> 
+  summarize(sev_max = max(sev, na.rm = TRUE),
+            sev_min = min(sev, na.rm = TRUE),
+            sev_difference = sev_max - sev_min)
+
+# none with difference of sev < 5%
+```
+
+As none of the trials had a difference of sev \< 5, all trials were used in meta-analysis.
+
+## Correlation
+
+In this section we are going to analyse if there is correlation between the DFC's severity at the field and the soybean yield.
+
+### Preparation of the data
+
+For the meta-analytic analysis, it is necessary to prepare the data and calculate the Pearson's correlations (r) between disease severity and yield for each study in the data. These calculated Pearson correlations will be transformed using Fisher's Z (Z) transformation to normalize the distribution of the data. Additionally, the variance (V) will be calculated.
+
+```{r}
+correlation_data <- lsd_combined %>%
+  group_by(LOCAL_YEAR) %>%
+  summarise(r_sev_yld = cor(sev, yld),
+            n = n(),
+            Z_sev_yld = 0.5*log((1+r_sev_yld)/(1-r_sev_yld)),
+            V = 1/(n-3),
+            vd_sev_yld = 1/(2*(1-r_sev_yld)/n-3)) |> 
+  filter(r_sev_yld != "NA") |> 
+  filter(n > 4)
+```
+
+### Correlations analysis
+
+Now we are going to calculate the mean correlation utilizing the meta-analytic approach before used by Dalla Lana et al. (2015).
+
+```{r}
+meta_cor_sev_yld <- rma(Z_sev_yld, V, data = correlation_data)
+meta_cor_sev_yld
+```
+
+```{r}
+Z_sev_yld <- meta_cor_sev_yld$b
+
+metafor::predict.rma(meta_cor_sev_yld)
+
+R_sev_yld <- fisherz2r(Z_sev_yld)
+R_sev_yld
+```
+
+```{r}
+predict(meta_cor_sev_yld, transf = transf.ztor)
+```
+
+### Graphics r correlation
+
+```{r}
+r_sev_yld <- correlation_data %>% 
+  ggplot(aes(r_sev_yld)) +
+  geom_histogram(bins = 10,
+                 color = "black",
+                 fill = "white",
+                 alpha = 0.5,
+                 size = 1) +
+  ylab("Frequency") +
+  xlab(expression("Pearson's correlation coefficient (" * italic(r) * ")")) +
+  theme_minimal_hgrid()
+
+r_sev_yld
+
+Z_sev_yld <- correlation_data %>% 
+  ggplot(aes(Z_sev_yld))+
+  geom_histogram(bins = 10,
+                 color = "black",
+                 fill = "white",
+                 alpha = 0.5,
+                 size = 1) +
+  ylab("Frequency") +
+   xlab(expression("Fisher's transformation of (" * italic(r) * ") (" * italic(Z) * ")")) +
+  theme_minimal_hgrid()
+
+Z_sev_yld
+
+
+(r_sev_yld | Z_sev_yld)
+
+```
+
+## Random effects models
+
+```{r}
+# individual regressions
+fit_all <- lsd_combined%>%
+  group_by(LOCAL_YEAR) |> 
+  do(broom::tidy(lm(.$yld ~ .$sev), conf.int=TRUE))
+summary(fit_all)
+```
+
+
+```{r}
+# data preparation
+Intercepts <- fit_all |> 
+  filter(term == "(Intercept)")
+Slopes <-  fit_all |> 
+  filter(term == ".$sev")
+```
+
+```{r}
+# Model for the intercepts
+dfc1 <- rma(yi = estimate, sei = std.error, data = Intercepts)
+summary(dfc1)
+
+metafor::predict.rma(dfc1)
+```
+
+```{r}
+# Model for the slopes
+dfc2 <- rma(yi = estimate, sei = std.error, data = Slopes)
+summary(dfc2)
+metafor::predict.rma(dfc2)
+```
+
+```{r}
+b1 <- fit_all |> 
+  filter(term == "(Intercept)") |> 
+  ggplot(aes(x = estimate))+
+  geom_histogram(bins = 15, color = "black", fill = "white", alpha = 0.5, size = 1)+
+  theme_minimal_hgrid()+
+  labs(x = "Intercept", y = "Frequency") +
+  theme(
+    axis.title.x = element_text(size = 20),
+    axis.title.y = element_text(size = 20),
+    axis.text.x = element_text(size = 18),   
+    axis.text.y = element_text(size = 18))
+
+b2 <- fit_all |> 
+  filter(term == ".$sev") |> 
+  ggplot(aes(x = estimate))+
+  geom_histogram(bins = 15, color = "black", fill = "white", alpha = 0.5, size = 1)+
+  theme_minimal_hgrid()+
+  labs(x = "Slope", y = "Frequency")+
+   theme(
+    axis.title.x = element_text(size = 20), 
+    axis.title.y = element_text(size = 20), 
+    axis.text.x = element_text(size = 16),   
+    axis.text.y = element_text(size = 16))
+
+(b1 + b2)
+```
+
+Let's make a forest plot that shows the distribution of the ꞵ1:
+
+```{r}
+Slopes2 <- Slopes 
+Slopes2$ENUM_LOCAL_YEAR <- as.integer(factor(Slopes2$LOCAL_YEAR, levels = unique(Slopes2$LOCAL_YEAR)))
+
+Slopes2 |> 
+  ggplot(aes(reorder(ENUM_LOCAL_YEAR, +estimate), estimate)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = conf.low,
+                    ymax = conf.high),
+                width = 0.5,
+                linetype = "solid") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  labs(x = "Study", y = "Slope")+
+   theme_half_open()+
+  coord_flip()+
+  theme(text = element_text(size = 20),
+        axis.text.x = element_text(size = 18),   
+        axis.text.y = element_text(size = 13))
+```
+
+
+## Moderator variables
+
+Disease pressure (low severity = ≤35% and high severity = \>35%), yield class (low = ≤3,745 kg/ha and high = \>3,745 kg/ha), region (trials conducted below 20°S were classified as south, and others as north), altitude (\<635 m or ≥635 m above sea level), and year were included as categorical moderators that could explain at least part of the observed heterogeneity and expanded the model from a random to a mixed effects model.
+
+```{r}
+moderators <- read_csv("moderators.csv")
+class_df <- moderators[, c("LOCAL_YEAR", "yield_class", "sev_class", "region_class", "altitude_class", "YEAR")]
+
+
+#preparing data: INTERCEPTS
+int_class <- left_join(Intercepts, class_df, by = "LOCAL_YEAR")
+
+int_class <- int_class |> 
+  group_by(LOCAL_YEAR) |> 
+  mutate(mean_estimate = mean(estimate)) |> 
+  distinct(LOCAL_YEAR, .keep_all = TRUE)
+
+
+#preparing data: SLOPES
+slope_class <- left_join(Slopes, class_df, by = "LOCAL_YEAR")
+
+slope_class <- slope_class |> 
+  group_by(LOCAL_YEAR) |> 
+  mutate(mean_estimate = mean(estimate)) |> 
+  distinct(LOCAL_YEAR, .keep_all = TRUE)
+
+```
+
+## Yield Class
+
+```{r}
+# Intercept
+
+lsd1 <- rma(yi = estimate ~ factor(yield_class), sei = std.error, data = int_class)
+summary(lsd1)
+
+# Slope
+
+lsd2 <- rma(yi = estimate ~ factor(yield_class), sei = std.error, data = slope_class)
+summary(lsd2)
+
+```
+
+## Sev Class
+
+
+```{r}
+# Intercept
+
+lsd3 <- rma(yi = estimate ~ factor(sev_class), sei = std.error, data = int_class)
+summary(lsd3)
+
+# Slope
+
+lsd4 <- rma(yi = estimate ~ factor(sev_class), sei = std.error, data = slope_class)
+summary(lsd4)
+```
+
+
+## Region Class
+
+```{r}
+# Intercept
+
+lsd5 <- rma(yi = estimate ~ factor(region_class), sei = std.error, data = int_class)
+summary(lsd5)
+
+# Slope
+
+lsd6 <- rma(yi = estimate ~ factor(region_class), sei = std.error, data = slope_class)
+summary(lsd6)
+```
+
+## Altitude Class
+
+
+```{r}
+# Intercept
+
+lsd7 <- rma(yi = estimate ~ factor(altitude_class), sei = std.error, data = int_class)
+summary(lsd7)
+
+# Slope
+
+lsd8 <- rma(yi = estimate ~ factor(altitude_class), sei = std.error, data = slope_class)
+summary(lsd8)
+```
+
+## Year
+
+```{r}
+# Intercept
+
+lsd9 <- rma(yi = estimate ~ factor(YEAR), sei = std.error, data = int_class)
+summary(lsd9)
+
+# Slope
+
+lsd10 <- rma(yi = estimate ~ factor(YEAR), sei = std.error, data = slope_class)
+summary(lsd10)
+```
+
+# Relative damage loss
+
+Based on the overall mean of the intercept (β0 = 4,589.06 kg/ha) and the slope (β1 = -22.58 kg/ha) estimated by the random-effects model, the overall relative damage coefficient was estimated at -0.49%.As a example, let's suppose that to achieve a relative yield of 80%, corresponding to a 20% reduction in yield (yield loss), the severity of LSD would need to reach approximately 40.6%. 
+
+```{r}
+df <- data.frame(sev = (seq(0, 100, by = 5)))
+df$yield <- 4589.0620 - 22.5833 * df$sev
+df$relative <- df$yield *100 / 4589.06
+
+df |> 
+ ggplot(aes(sev, relative)) +
+  geom_smooth(method = (lm), se = FALSE, color = "black", fullrange = TRUE)+
+  scale_y_continuous(breaks = c(20, 40, 60, 80, 100), 
+                     limits = c(20, 100),
+                     expand = c(0, 0))+
+  scale_x_continuous(breaks = c(0, 25, 50, 75, 100),
+                     limits = c(0, 100),
+                     expand = c(0, 0))+
+  labs(x = "LSD Severity (%)", y = "Relative yield (%) ")+
+  geom_hline(yintercept = 80,
+             linetype = 2)+
+  geom_vline(xintercept = c(40.647032772), linetype = 2)+
+  theme_classic()+
+  theme(text = element_text(size = 20),
+        axis.text.x = element_text(size = 18),   
+        axis.text.y = element_text(size = 18))
+```
+
+
+
+# Economic damage threshold
+
+```{r}
+# Function to Simulate EDC
+
+simula_LDE <- function(n, media_rp, sd_rp, eficacia, cd_base, custo_range, preco_range) {
+  simulacoes <- tibble(
+    rendimento_potencial = rnorm(n, media_rp, sd_rp),
+    custo_controle = runif(n, custo_range[1], custo_range[2]),
+    preco_produto = runif(n, preco_range[1], preco_range[2]),
+    eficacia = eficacia
+  ) %>% 
+    mutate(
+      coeficiente_dano = cd_base * rendimento_potencial,
+      LDE = (custo_controle / (preco_produto * coeficiente_dano)) * eficacia
+    )
+  return(simulacoes)
+}
+
+
+n = 5000 # number of simulations
+media_rp = 4.6 # in ton/ha
+sd_rp = 0.79  # SD of attainable yield
+eficacia = rnorm(5000, 0.54, 0.1) #  in proportion
+cd_base = 0.0049 # 0.49  / 100 -> %/ton
+custo_range = c(25, 25) # cust of control (US$)
+preco_range = c(393.22, 393.22) # soybean price (US$)
+
+# run the simulation
+simula <- simula_LDE(n, media_rp, sd_rp, eficacia, cd_base, custo_range, preco_range)
+```
+
+
+```{r}
+# Make the plots:
+
+simula$median_LDE <- median(simula$LDE)
+simula$mean_LDE <- mean(simula$LDE)
+
+# Calculate the 95% confidence interval of EDT
+simula$ci_lower <- quantile(simula$LDE, probs = 0.025)
+simula$ci_upper <- quantile(simula$LDE, probs = 0.975)
+
+# Plot:
+
+ggplot(simula, aes(x = LDE)) +
+  stat_halfeye(fill = "darkorange", alpha = 0.7) +
+  geom_vline(aes(xintercept = median_LDE), color = "red", linetype = "dashed", size = 1) +
+    labs(title = paste("Median EDT:", round(simula$median_LDE, 2), "\n95% CI: [", round(simula$ci_lower, 2), ", ", round(simula$ci_upper, 2), "]"),
+       x = "Economic Damage Threshold (EDT)",
+       y = "Density") +
+    theme_classic(base_size = 16)
+
+i1 <- ggplot(simula, aes(x = LDE)) +
+  stat_halfeye(fill = "darkorange", alpha = 0.7) +
+  geom_vline(aes(xintercept = median(LDE)), color = "red", linetype = "dashed", size = 1) +
+  annotate("text", x = 3.2, y = 0.90, label = "Median = 1.54%", color = "black", size = 4.5) +
+  annotate("text", x = 3.2, y = 0.85, label = "95% CI = 0.89%, 2.53%", color = "black", size = 4.5) +
+  labs(
+    x = "Economic Damage Threshold (EDT)",
+    y = "Density"
+  ) +
+  theme_classic(base_size = 16)
+
+
+i2 <-simula |> 
+  ggplot(aes(rendimento_potencial, eficacia, color = LDE ))+
+  geom_point()+
+  scale_color_viridis_c(labels = scales::number_format(accuracy = 0.1))+
+   labs(color = "EDT",
+     x = "Attainable yield (ton/ha)",
+       y = "Fungicide efficacy (%)") +
+    theme_classic(base_size = 16)
+
+i1+i2+
+  plot_annotation(tag_levels = "A")
+```
