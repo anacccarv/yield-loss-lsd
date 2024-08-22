@@ -8,4 +8,4 @@ This website offers access to well-documented R scripts that facilitate the repl
 
 The current research explores the association between late-season diseases in soybeans and crop yield across four growing seasons (2020-2024) in nine Brazilian states. Data were collected from 39 field trials and incorporated into a meta-analysis using random effects models. The study also evaluated how moderator variables, including disease pressure, yield class, region, altitude, and year, influence this relationship. The findings provide valuable insights into the impact of late-season diseases on soybean yield, assisting farmers in making more informed decisions regarding disease management strategies.
 
-![](images/Foto Hercules D. Campos (1).png)
+![](images/Foto%20Hercules%20D.%20Campos%20(1).png){fig-align="center" width="487"}
